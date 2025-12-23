@@ -44,7 +44,7 @@ export const db = {
     try {
       const sql = getSql();
       console.log(`[Neon DB] Saving note ${note.id} for user ${userId}...`);
-      
+
       // Upsert note
       await sql`
         INSERT INTO notes (

@@ -24,7 +24,7 @@ export async function transcribeAudio(audioUri: string): Promise<{
     // In Expo 54, getInfoAsync is deprecated/removed.
     // We can just rely on fetch(audioUri) to fail if the file doesn't exist,
     // or use a more compatible check if needed.
-    
+
     // Upload to Deepgram using fetch API
     const audioBlob = await fetch(audioUri).then(r => r.blob());
     

@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet } from 'react-native';
 import { ClerkProvider, useAuth, useUser } from '@clerk/clerk-expo';
 import { useFonts, Jersey10_400Regular } from '@expo-google-fonts/jersey-10';
+import { Jersey25_400Regular } from '@expo-google-fonts/jersey-25';
 import { tokenCache } from './lib/clerk';
 import { useNotes, storage } from './lib/storage';
 import { Note, AppView } from './types';
@@ -91,6 +92,12 @@ function MainApp() {
     setSelectedNote(null);
   };
 
+  const handleDeleteNotes = async (ids: string[]) => {
+    for (const id of ids) {
+      await storage.deleteNote(id, user?.id);
+    }
+  };
+
   const handleFinishRecording = async (transcript: string, segments: any[]) => {
     const newNote: Note = {
       id: Math.random().toString(36).substr(2, 9),
@@ -100,7 +107,7 @@ function MainApp() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       isPinned: false,
-      category: 'Recent',
+      category: 'Jots',
       isSynced: false,
       isDeleted: false
     };
@@ -129,12 +136,14 @@ function MainApp() {
         <Home
           notes={notes}
           userName={user?.firstName || 'Guest'}
+          isSignedIn={isSignedIn || false}
           onStartRecording={() => setView('recording')}
           onSelectNote={(note) => {
             setSelectedNote(note);
             setView('editor');
           }}
           onUpdateNote={handleUpdateNote}
+          onDeleteNotes={handleDeleteNotes}
           onOpenProfile={() => setView('profile')}
         />
       )}
@@ -177,6 +186,7 @@ function MainApp() {
 export default function App() {
   const [fontsLoaded] = useFonts({
     'Jersey10': Jersey10_400Regular,
+    'Jersey25': Jersey25_400Regular,
   });
 
   if (!fontsLoaded) {

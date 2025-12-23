@@ -1,29 +1,139 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Animated } from 'react-native';
 import { Note } from '../types';
+import { SearchIcon, PinIcon, FolderIcon, UserIcon, MicrophoneIcon, PlusIcon, ShareIcon, TrashIcon } from '../components/Icons';
 
 interface HomeProps {
   notes: Note[];
   userName?: string;
+  isSignedIn?: boolean;
   onStartRecording: () => void;
   onSelectNote: (note: Note) => void;
   onUpdateNote: (note: Note) => void;
+  onDeleteNotes?: (ids: string[]) => void;
   onOpenProfile: () => void;
 }
 
-export default function Home({ notes, userName = 'Guest', onStartRecording, onSelectNote, onUpdateNote, onOpenProfile }: HomeProps) {
+// Helper to get unique speaker count from segments
+const getSpeakerCount = (note: Note): number => {
+  if (!note.segments || note.segments.length === 0) return 0;
+  const uniqueSpeakers = new Set(note.segments.map(s => s.speakerId));
+  return uniqueSpeakers.size;
+};
+
+// Helper to format date intelligently
+const formatDate = (timestamp: number): string => {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  } else if (diffDays === 1) {
+    return 'Yesterday';
+  } else if (diffDays < 7) {
+    return date.toLocaleDateString('en-US', { weekday: 'long' });
+  } else {
+    return date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' });
+  }
+};
+
+export default function Home({ 
+  notes, 
+  userName = 'Guest', 
+  isSignedIn = false,
+  onStartRecording, 
+  onSelectNote, 
+  onUpdateNote,
+  onDeleteNotes,
+  onOpenProfile 
+}: HomeProps) {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const categories = ['All', 'Bookmarks', 'Ideas', 'Personal'];
-  const filteredNotes = notes.filter(n => 
-    (activeCategory === 'All' || n.category === activeCategory) &&
-    ((n.title?.toLowerCase().includes(search.toLowerCase()) || false) || 
-     (n.content?.toLowerCase().includes(search.toLowerCase()) || false))
-  );
+  // Animation values
+  const headerOpacity = useRef(new Animated.Value(0)).current;
+  const titleOpacity = useRef(new Animated.Value(0)).current;
+  const searchOpacity = useRef(new Animated.Value(0)).current;
+  const categoriesOpacity = useRef(new Animated.Value(0)).current;
+  const notesOpacity = useRef(new Animated.Value(0)).current;
+  const floatingBarOpacity = useRef(new Animated.Value(0)).current;
 
-  const pinnedNotes = filteredNotes.filter(n => n.isPinned);
-  const recentNotes = filteredNotes.filter(n => !n.isPinned);
+  useEffect(() => {
+    // Fade in animations on mount
+    Animated.stagger(200, [
+      Animated.timing(headerOpacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(titleOpacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(searchOpacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(categoriesOpacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(notesOpacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(floatingBarOpacity, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  // Get unique categories from notes (excluding 'Recent')
+  const categories = useMemo(() => {
+    const cats = new Set(
+      notes
+        .map(n => n.category)
+        .filter(cat => Boolean(cat) && cat !== 'Recent')
+    );
+    return ['All', ...Array.from(cats)];
+  }, [notes]);
+
+  // Filter and sort notes - pinned notes always show regardless of category
+  const { pinnedNotes, recentNotes } = useMemo(() => {
+    const allPinned = notes
+      .filter(n => 
+        n.isPinned &&
+        ((n.title?.toLowerCase().includes(search.toLowerCase()) || false) || 
+         (n.content?.toLowerCase().includes(search.toLowerCase()) || false))
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const filteredRecent = notes
+      .filter(n => {
+        if (n.isPinned) return false;
+        
+        // Treat 'Recent' or empty category as uncategorized (show in 'All' or when no category matches)
+        const noteCategory = (!n.category || n.category === 'Recent') ? null : n.category;
+        
+        const matchesCategory = activeCategory === 'All' || noteCategory === activeCategory;
+        const matchesSearch = (n.title?.toLowerCase().includes(search.toLowerCase()) || false) || 
+                             (n.content?.toLowerCase().includes(search.toLowerCase()) || false);
+        
+        return matchesCategory && matchesSearch;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    return { pinnedNotes: allPinned, recentNotes: filteredRecent };
+  }, [notes, activeCategory, search]);
 
   const handleCreateNote = () => {
     const newNote: Note = {
@@ -34,39 +144,184 @@ export default function Home({ notes, userName = 'Guest', onStartRecording, onSe
       createdAt: Date.now(),
       updatedAt: Date.now(),
       isPinned: false,
-      category: 'Recent'
+      category: 'Jots'
     };
     onUpdateNote(newNote);
     onSelectNote(newNote);
   };
 
+  const toggleSelection = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.size === 0) return;
+    
+    Alert.alert(
+      'Delete Notes',
+      `Are you sure you want to delete ${selectedIds.size} note${selectedIds.size > 1 ? 's' : ''}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive',
+          onPress: () => {
+            if (onDeleteNotes) {
+              onDeleteNotes(Array.from(selectedIds));
+            }
+            setSelectedIds(new Set());
+            setIsSelecting(false);
+          }
+        }
+      ]
+    );
+  };
+
+  const handleShareSelected = () => {
+    Alert.alert('Share', `Sharing ${selectedIds.size} note${selectedIds.size > 1 ? 's' : ''}`);
+  };
+
+  const cancelSelection = () => {
+    setIsSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  const getCategoryCount = (category: string) => {
+    if (category === 'All') return notes.length;
+    // Count notes with this category, excluding 'Recent' which is treated as uncategorized
+    return notes.filter(n => {
+      const noteCategory = (!n.category || n.category === 'Recent') ? null : n.category;
+      return noteCategory === category;
+    }).length;
+  };
+
+  const renderNoteCard = (note: Note, isPinned: boolean) => {
+    const speakerCount = getSpeakerCount(note);
+    const isSelected = selectedIds.has(note.id);
+
+    return (
+      <TouchableOpacity
+        key={note.id}
+        style={[
+          styles.noteCard,
+          isPinned ? styles.pinnedCard : styles.recentCard,
+          isSelected && styles.selectedCard
+        ]}
+        onPress={() => {
+          if (isSelecting) {
+            toggleSelection(note.id);
+          } else {
+            onSelectNote(note);
+          }
+        }}
+        onLongPress={() => {
+          if (!isSelecting) {
+            setIsSelecting(true);
+            setSelectedIds(new Set([note.id]));
+          }
+        }}
+        activeOpacity={0.7}
+      >
+        {/* Selection checkbox - top right */}
+        {isSelecting && (
+          <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
+            {isSelected && <Text style={styles.checkmark}>✓</Text>}
+          </View>
+        )}
+
+        {/* Speaker count badge - only for signed-in users */}
+        {isSignedIn && speakerCount > 0 && !isSelecting && (
+          <View style={[styles.speakerBadge, isPinned ? styles.speakerBadgePinned : null]}>
+            <Text style={[styles.speakerCount, isPinned ? styles.speakerCountPinned : null]}>
+              {speakerCount}
+            </Text>
+          </View>
+        )}
+
+        {/* Note content */}
+        <View style={styles.noteContent}>
+          <View style={styles.noteTitleRow}>
+            {isPinned && (
+              <View style={styles.pinIconContainer}>
+                <PinIcon size={14} color={isPinned ? '#fff' : '#000'} />
+              </View>
+            )}
+            <Text style={[styles.noteTitle, isPinned && styles.noteTitlePinned]} numberOfLines={1}>
+              {note.title || 'Untitled'}
+            </Text>
+          </View>
+          
+          <View style={styles.noteMetaRow}>
+            <Text style={[styles.noteDate, isPinned && styles.noteDatePinned]}>
+              {formatDate(note.updatedAt)}
+            </Text>
+            <Text style={[styles.notePreview, isPinned && styles.notePreviewPinned]} numberOfLines={1}>
+              {note.content || 'No content'}
+            </Text>
+          </View>
+
+          <View style={styles.noteCategoryRow}>
+            <View style={styles.folderIconContainer}>
+              <FolderIcon size={12} color={isPinned ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)'} />
+            </View>
+            <Text style={[styles.noteCategory, isPinned && styles.noteCategoryPinned]}>
+              {note.category && note.category !== 'Recent' ? note.category : 'Jots'}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.userBadge} onPress={onOpenProfile}>
-            <View style={styles.avatar} />
-            <Text style={styles.userName}>Hi, {userName}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuButton}>
-            <Text style={styles.menuIcon}>⋯</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Header */}
+        <Animated.View style={{ opacity: headerOpacity }}>
+          <View style={styles.header}>
+            <TouchableOpacity style={styles.userBadge} onPress={onOpenProfile}>
+              <View style={styles.avatar}>
+                <UserIcon size={18} color="#000" />
+              </View>
+              <Text style={styles.userName}>Hi, {userName.toLowerCase()}</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity onPress={() => isSelecting ? cancelSelection() : setIsSelecting(true)}>
+              <Text style={styles.selectButton}>{isSelecting ? 'Cancel' : 'Select'}</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
 
-        <Text style={styles.title}>My{'\n'}Journal</Text>
+        {/* Title */}
+        <Animated.Text style={[styles.title, { opacity: titleOpacity }]}>
+          My{'\n'}Personal Jots
+        </Animated.Text>
 
-        <View style={styles.searchContainer}>
-          <Text style={styles.searchIcon}>🔍</Text>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search"
-            placeholderTextColor="rgba(0,0,0,0.2)"
-            value={search}
-            onChangeText={setSearch}
-          />
-        </View>
+        {/* Search */}
+        <Animated.View style={{ opacity: searchOpacity }}>
+          <View style={styles.searchContainer}>
+            <View style={styles.searchIconContainer}>
+              <SearchIcon size={16} color="rgba(0,0,0,0.5)" />
+            </View>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search"
+              placeholderTextColor="rgba(0,0,0,0.4)"
+              value={search}
+              onChangeText={setSearch}
+            />
+          </View>
+        </Animated.View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoriesScroll}>
+        {/* Categories */}
+        <Animated.View style={{ opacity: categoriesOpacity }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoriesScroll}>
           {categories.map(cat => (
             <TouchableOpacity
               key={cat}
@@ -74,67 +329,61 @@ export default function Home({ notes, userName = 'Guest', onStartRecording, onSe
               onPress={() => setActiveCategory(cat)}
             >
               <Text style={[styles.categoryText, activeCategory === cat && styles.categoryTextActive]}>
-                {cat} ({cat === 'All' ? notes.length : notes.filter(n => n.category === cat).length})
+                {cat} ({getCategoryCount(cat)})
               </Text>
             </TouchableOpacity>
           ))}
-        </ScrollView>
+          <TouchableOpacity style={styles.addCategoryButton}>
+            <Text style={styles.addCategoryIcon}>+</Text>
+          </TouchableOpacity>
+          </ScrollView>
+        </Animated.View>
 
-        {pinnedNotes.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Pinned</Text>
-            {pinnedNotes.map(note => (
-              <TouchableOpacity
-                key={note.id}
-                style={[styles.noteCard, styles.pinnedCard]}
-                onPress={() => onSelectNote(note)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.noteHeader}>
-                  <Text style={styles.noteTitle} numberOfLines={1}>{note.title || 'Untitled'}</Text>
-                  <Text style={styles.pinIcon}>📌</Text>
-                </View>
-                <Text style={styles.noteContent} numberOfLines={3}>{note.content}</Text>
-                <Text style={styles.noteDate}>
-                  {new Date(note.createdAt).toLocaleDateString()}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Recent</Text>
-          {recentNotes.length > 0 ? (
-            recentNotes.map(note => (
-              <TouchableOpacity
-                key={note.id}
-                style={styles.noteCard}
-                onPress={() => onSelectNote(note)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.noteTitle} numberOfLines={1}>{note.title || 'Untitled'}</Text>
-                <Text style={styles.noteContent} numberOfLines={3}>{note.content}</Text>
-                <Text style={styles.noteDate}>
-                  {new Date(note.createdAt).toLocaleDateString()}
-                </Text>
-              </TouchableOpacity>
-            ))
-          ) : (
-            <Text style={styles.emptyText}>No notes found</Text>
+        {/* Pinned Notes */}
+        <Animated.View style={{ opacity: notesOpacity }}>
+          {pinnedNotes.length > 0 && (
+            <View style={styles.section}>
+              {pinnedNotes.map(note => renderNoteCard(note, true))}
+            </View>
           )}
-        </View>
+
+          {/* Recent Notes */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Recent</Text>
+            {recentNotes.length > 0 ? (
+              recentNotes.map(note => renderNoteCard(note, false))
+            ) : (
+              <Text style={styles.emptyText}>No notes found</Text>
+            )}
+          </View>
+        </Animated.View>
       </ScrollView>
 
-      <View style={styles.floatingBar}>
-        <TouchableOpacity style={styles.recordButton} onPress={onStartRecording}>
-          <Text style={styles.recordIcon}>🎤</Text>
-        </TouchableOpacity>
-        <View style={styles.divider} />
-        <TouchableOpacity style={styles.newNoteButton} onPress={handleCreateNote}>
-          <Text style={styles.newNoteIcon}>📝</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Selection Actions Bar */}
+      {isSelecting && selectedIds.size > 0 && (
+        <View style={styles.selectionBar}>
+          <TouchableOpacity style={styles.selectionAction} onPress={handleShareSelected}>
+            <ShareIcon size={20} color="#000" />
+            <Text style={styles.selectionActionText}>Share</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.selectionAction} onPress={handleDeleteSelected}>
+            <TrashIcon size={20} color="#000" />
+            <Text style={styles.selectionActionText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Floating Action Bar */}
+      {!isSelecting && (
+        <Animated.View style={[styles.floatingBar, { opacity: floatingBarOpacity }]}>
+          <TouchableOpacity style={styles.recordButton} onPress={onStartRecording}>
+            <MicrophoneIcon size={24} color="#1a1a1a" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.newNoteButton} onPress={handleCreateNote}>
+            <PlusIcon size={18} color="#f7f5ed" />
+          </TouchableOpacity>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -142,160 +391,270 @@ export default function Home({ notes, userName = 'Guest', onStartRecording, onSe
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F3',
+    backgroundColor: '#E7E5DB',
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 120,
-    width: '100%',
+    paddingBottom: 140,
   },
+  
+  // Header
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingTop: 48,
-    paddingBottom: 16,
+    paddingTop: 50,
+    paddingBottom: 8,
   },
   userBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
     gap: 8,
   },
   avatar: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#FED7AA',
-  },
-  userName: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#000',
-  },
-  menuButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E8C9A0',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  menuIcon: {
-    fontSize: 20,
+  userName: {
+    fontSize: 16,
+    fontWeight: '500',
     color: '#000',
   },
+  selectButton: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000',
+  },
+
+  // Title
   title: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#000',
-    letterSpacing: -1,
-    lineHeight: 40,
+    fontSize: 64,
+    fontWeight: '900',
+    color: '#1a1a1a',
+    letterSpacing: 0,
+    lineHeight: 52,
     paddingHorizontal: 24,
-    marginTop: 8,
-    marginBottom: 24,
+    marginTop: 16,
+    marginBottom: 5,
+    fontFamily: 'Jersey10',
   },
+
+  // Search
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: '#Dad7cc',
     marginHorizontal: 24,
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.05)',
-    marginBottom: 24,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 20,
   },
-  searchIcon: {
-    fontSize: 18,
-    marginRight: 12,
+  searchIconContainer: {
+    marginRight: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 17,
     color: '#000',
   },
+
+  // Categories
   categoriesScroll: {
-    marginBottom: 24,
-    paddingHorizontal: 24,
+    marginBottom: 20,
+    paddingLeft: 24,
   },
   categoryButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: '#fff',
     marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#1a1a1a80',
   },
   categoryButtonActive: {
-    backgroundColor: '#000',
+    backgroundColor: '#1a1a1a',
+    borderColor: '#1a1a1a',
   },
   categoryText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: 'rgba(0,0,0,0.6)',
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#000',
+    fontFamily: 'Jersey25',
   },
   categoryTextActive: {
     color: '#fff',
+    fontFamily: 'Jersey25',
   },
+  addCategoryButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 24,
+  },
+  addCategoryIcon: {
+    fontSize: 28,
+    color: '#1a1a1a',
+    fontWeight: '300',
+  },
+
+  // Sections
   section: {
     paddingHorizontal: 24,
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 16,
-    letterSpacing: -0.5,
-  },
-  noteCard: {
-    backgroundColor: 'rgba(194, 211, 228, 0.3)',
-    padding: 20,
-    borderRadius: 28,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.05)',
-  },
-  pinnedCard: {
-    backgroundColor: 'rgba(251, 146, 60, 0.4)',
-  },
-  noteHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     marginBottom: 8,
   },
-  noteTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-    flex: 1,
-    letterSpacing: -0.5,
+  sectionTitle: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#1a1a1a',
+    marginBottom: 10,
+    marginTop: 0,
+    fontFamily: 'Jersey10',
   },
-  pinIcon: {
-    fontSize: 16,
-    marginLeft: 8,
+
+  // Note Cards
+  noteCard: {
+    padding: 16,
+    borderRadius: 10,
+    marginBottom: 12,
+    position: 'relative',
+  },
+  pinnedCard: {
+    backgroundColor: '#303138',
+  },
+  recentCard: {
+    backgroundColor: '#DAD8CC',
+  },
+  selectedCard: {
+    borderWidth: 2,
+    borderColor: '#F7F5ED',
   },
   noteContent: {
-    fontSize: 14,
-    color: 'rgba(0,0,0,0.5)',
-    lineHeight: 20,
-    marginBottom: 16,
+    flex: 1,
+  },
+  noteTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    paddingRight: 30,
+  },
+  pinIconContainer: {
+    marginRight: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noteTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#000',
+    flex: 1,
+  },
+  noteTitlePinned: {
+    color: '#fff',
+  },
+  noteMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
   },
   noteDate: {
-    fontSize: 10,
-    color: 'rgba(0,0,0,0.3)',
+    fontSize: 13,
+    color: 'rgba(0,0,0,0.5)',
     fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
   },
+  noteDatePinned: {
+    color: 'rgba(255,255,255,0.6)',
+  },
+  notePreview: {
+    fontSize: 13,
+    color: 'rgba(0,0,0,0.5)',
+    flex: 1,
+  },
+  notePreviewPinned: {
+    color: 'rgba(255,255,255,0.6)',
+  },
+  noteCategoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  folderIconContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noteCategory: {
+    fontSize: 12,
+    color: 'rgba(0,0,0,0.5)',
+    fontWeight: '500',
+  },
+  noteCategoryPinned: {
+    color: 'rgba(255,255,255,0.5)',
+  },
+
+  // Speaker Badge
+  speakerBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  speakerBadgePinned: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  speakerCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(0,0,0,0.6)',
+  },
+  speakerCountPinned: {
+    color: '#fff',
+  },
+
+  // Selection
+  checkbox: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    zIndex: 10,
+  },
+  checkboxSelected: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+
+  // Empty State
   emptyText: {
     textAlign: 'center',
     fontSize: 14,
@@ -303,50 +662,72 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     paddingVertical: 48,
   },
+
+  // Selection Bar
+  selectionBar: {
+    position: 'absolute',
+    bottom: 40,
+    left: 24,
+    right: 24,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#fff',
+    paddingVertical: 16,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  selectionAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 8,
+  },
+  selectionActionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000',
+  },
+
+  // Floating Action Bar
   floatingBar: {
     position: 'absolute',
     bottom: 40,
     left: '50%',
-    transform: [{ translateX: -80 }],
+    transform: [{ translateX: -36 }], // Center the record button (8px padding + 28px half of 56px button)
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 30,
+    backgroundColor: '#1a1a1a',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 40,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.4)',
+    gap: 4,
   },
   recordButton: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#000',
+    backgroundColor: '#f7f5ed',
+    borderColor: '#1a1a1a80',
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  recordIcon: {
-    fontSize: 24,
-  },
-  divider: {
-    width: 1,
-    height: 32,
-    backgroundColor: 'rgba(0,0,0,0.1)',
-    marginHorizontal: 16,
   },
   newNoteButton: {
     width: 48,
     height: 48,
     borderRadius: 24,
+    backgroundColor: '#1a1a1a',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  newNoteIcon: {
-    fontSize: 22,
   },
 });

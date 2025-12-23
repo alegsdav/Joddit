@@ -127,7 +127,7 @@ class Storage {
       // 1. Save locally
       const notes = await this.getLocalNotes();
       const existingIndex = notes.findIndex(n => n.id === note.id);
-      
+
       if (existingIndex >= 0) {
         notes[existingIndex] = updatedNote;
       } else {
@@ -207,7 +207,7 @@ class Storage {
   // Helper to get raw local notes
   async getLocalNotes(): Promise<Note[]> {
     try {
-      const notesJson = await AsyncStorage.getItem(NOTES_KEY);
+    const notesJson = await AsyncStorage.getItem(NOTES_KEY);
       const notes: Note[] = notesJson ? JSON.parse(notesJson) : [];
       // Filter out notes that are marked as deleted and synced
       return notes.filter(n => !n.isDeleted || !n.isSynced);
@@ -225,21 +225,21 @@ export function useNotes(userId?: string) {
 
   const loadAndSync = async () => {
     try {
-      setLoading(true);
+    setLoading(true);
       // 1. Load what we have locally right now
       const local = await storage.getLocalNotes();
       setNotes(local.filter(n => !n.isDeleted));
 
       // 2. If we have a user, perform a full sync
-      if (userId) {
+    if (userId) {
         console.log(`[useNotes] Triggering sync for ${userId}`);
         const synced = await storage.syncWithCloud(userId);
         setNotes(synced.filter(n => !n.isDeleted));
       }
-    } catch (e) {
+      } catch (e) {
       console.error('[useNotes] Error in loadAndSync:', e);
     } finally {
-      setLoading(false);
+    setLoading(false);
     }
   };
 
